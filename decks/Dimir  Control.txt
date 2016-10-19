@@ -1,0 +1,28 @@
+5 Island
+5 Swamp
+4 Dismal Backwater
+4 Temple of Deceit
+4 Polluted Delta
+2 Radiant Fountain
+1 Evolving Wilds
+1 Bloodstained Mire
+1 Urborg, Tomb of Yawgmoth
+1 Flooded Strand
+2 Pearl Lake Ancient
+4 Dig Through Time
+4 Bile Blight
+4 Hero's Downfall
+4 Dissolve
+3 Jace's Ingenuity
+3 Thoughtseize
+2 Despise
+1 Disdainful Stroke
+1 Murderous Cut
+4 Perilous Vault
+SB 1 Thoughtseize
+SB 1 Ætherspouts
+SB 2 Jorubai Murk Lurker
+SB 2 Pharika's Cure
+SB 3 Negate
+SB 4 Drown in Sorrow
+SB 2 Grindclock

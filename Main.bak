@@ -1,0 +1,419 @@
+#lang racket
+
+(require json)
+(require lang/posn)
+(require 2htdp/image)
+(require htdp/error)
+
+;; Object system from ps7
+(define (ask object message . args)  
+  (let ((method (get-method object message)))
+    (if (method? method)
+        (apply method (cons object args))
+        (error "No method" message (cadr method)))))
+
+(define (get-method object message)
+  (object message))
+
+(define (no-method name)
+  (list 'no-method name))
+
+(define (method? x)
+  (not (no-method? x)))
+
+(define (no-method? x)
+  (if (pair? x)
+      (eq? (car x) 'no-method)
+      #f))
+
+;;Exception Handler from http://alt-mcarter.blogspot.com/2010/09/drracket-dirt-simple-exception-handler.html
+
+(define-syntax catch-errors
+  (syntax-rules ()
+          ((_ error-value body ...)
+           (with-handlers ([exn:fail? (lambda (exn) error-value)])
+             body ...))))
+
+;; Card Database
+
+(define in (open-input-file "Standard.json"))
+
+(define card-list (read-json in))
+
+;; Card Objects
+
+(define (find-card card-name)
+  (findf (lambda (x) (equal? (hash-ref x 'name) card-name)) card-list)) 
+
+(define (make-card card-name)
+  (let ((card (find-card card-name)))
+    (lambda (message)
+      (cond ((eq? message 'get-name)         (lambda (self) card-name))
+            ((eq? message 'get-manaCost)     (lambda (self) (hash-ref card 'manaCost)))
+            ((eq? message 'get-cmc)          (lambda (self) (catch-errors 0 (hash-ref card 'cmc))))
+            ((eq? message 'get-colors)       (lambda (self) (hash-ref card 'colors)))
+            ((eq? message 'get-type)         (lambda (self) (hash-ref card 'type)))
+            ((eq? message 'get-supertypes)   (lambda (self) (hash-ref card 'supertypes)))
+            ((eq? message 'get-types)        (lambda (self) (hash-ref card 'types)))
+            ((eq? message 'get-subtypes)     (lambda (self) (hash-ref card 'subtypes)))
+            ((eq? message 'get-rarity)       (lambda (self) (hash-ref card 'rarity)))
+            ((eq? message 'get-text)         (lambda (self) (hash-ref card 'text)))
+            ((eq? message 'get-flavor)       (lambda (self) (hash-ref card 'flavor)))
+            ((eq? message 'get-artist)       (lambda (self) (hash-ref card 'artist)))
+            ((eq? message 'get-number)       (lambda (self) (hash-ref card 'number)))
+            ((eq? message 'get-power)        (lambda (self) (catch-errors 0 (hash-ref card 'power))))
+            ((eq? message 'get-toughness)    (lambda (self) (catch-errors 0 (hash-ref card 'toughness))))
+            ((eq? message 'get-layout)       (lambda (self) (hash-ref card 'layout)))
+            ((eq? message 'get-multiverseid) (lambda (self) (hash-ref card 'multiverseid)))
+            ((eq? message 'get-imageName)    (lambda (self) (hash-ref card 'imageName)))
+            
+            ((eq? message 'out)
+             (lambda (self [out-port (current-output-port)])
+               (display (ask self 'get-name) out-port)))
+                        
+            (else (no-method card-name))))))
+
+(define (make-counted-card count card-name)
+  (let ((card (make-card card-name)))
+    (lambda (message)
+      (cond ((eq? message 'get-count) 
+             (lambda (self) count))
+            ((eq? message 'add)       
+             (lambda (self n) (when (> n 0) (set! count (+ count n))) count))
+            ((eq? message 'remove)
+             (lambda (self n) (if (> n count) (set! count 0) (set! count (- count n))) count))
+            ((eq? message 'out)
+             (lambda (self [out-port (current-output-port)])
+               (display (ask self 'get-count) out-port)
+               (display " " out-port)
+               (ask card 'out out-port)))
+            (else (get-method card message))))))
+
+;;Deck Objects
+
+(define (filter-by-feature feature value list)
+  (filter
+   (lambda (card)
+     (let ((feature-res (ask card feature)))
+       (if (pair? feature-res)
+           (not (not(findf (lambda (x) (equal? x value)) feature-res)))
+           (equal? feature-res value))))
+   list))
+
+(define (find-card-deck card-name deck )
+  (findf (lambda (x) (equal? (ask x 'get-name) card-name)) deck))
+
+(define (make-deck)
+  (let ((deck '())
+        (sideboard '()))
+    (lambda (message)
+      (cond ((eq? message 'add-cards)
+             (lambda (self count name) 
+               (let ((res (find-card-deck name deck)))
+                 (if (false? res) (set! deck (append deck (list (make-counted-card count name)))) (ask res 'add count)))
+               self))
+            ((eq? message 'add-cards-sideboard)
+             (lambda (self count name) 
+               (let ((res (find-card-deck name sideboard)))
+                 (if (false? res) (set! sideboard (append sideboard (list (make-counted-card count name)))) (ask res 'add count)))
+               self))
+             ((eq? message 'remove-cards)
+              (lambda (self count name)
+                (let ((res (find-card-deck name deck)))
+                  (unless (false? res) (ask res 'remove count)))
+                self))
+             ((eq? message 'remove-cards-sideboard)
+              (lambda (self count name)
+                (let ((res (find-card-deck name sideboard)))
+                  (unless (false? res) (ask res 'remove count)))
+                self))
+             
+             ((eq? message 'get-deck-count)
+              (lambda (self card-name)
+                (let ((res (find-card-deck card-name deck)))
+                  (if (false? res) 0 (ask res 'get-count)))))
+             ((eq? message 'get-sideboard-count)
+              (lambda (self card-name)
+                (let ((res (find-card-deck card-name sideboard)))
+                  (if (false? res) 0 (ask res 'get-count)))))
+             ((eq? message 'get-count)
+              (lambda (self card-name)
+                (+ (ask self 'get-deck-count card-name) 
+                   (ask self 'get-sideboard-count card-name))))
+             ((eq? message 'contains?)
+              (lambda (self card-name)
+                (< 0 (ask self 'get-count card-name))))
+             
+             ((eq? message 'feature-count)
+              (lambda (self feature value)
+                (foldl + 0 (map (lambda (x)
+                                  (ask x 'get-count))
+                                (filter-by-feature feature value deck)))))
+             ((eq? message 'land-count)
+              (lambda (self)
+                (ask self 'feature-count 'get-types "Land")))
+             ((eq? message 'creature-count)
+              (lambda (self)
+                (ask self 'feature-count 'get-types "Creature")))
+             
+             ((eq? message 'avg-cmc)
+              (lambda (self) 
+                (/ (foldl + 0 (map (lambda (x)
+                                     (* (ask x 'get-count) (ask x 'get-cmc)))
+                                   deck))
+                   (- (ask self 'deck-size) (ask self 'land-count)))))
+             
+             ((eq? message 'out)
+              (lambda (self [out-port (current-output-port)])
+                (for-each (lambda (x) (ask x 'out out-port) (display #\newline out-port)) deck)
+                (for-each (lambda (x) (display "SB " out-port) (ask x 'out out-port) (display #\newline out-port)) sideboard)
+                ))
+             ((eq? message 'deck-size)
+              (lambda (self)
+                (foldl + 0 (map (lambda (x) (ask x 'get-count)) deck))))
+             ((eq? message 'sideboard-size)
+              (lambda (self)
+                (foldl + 0 (map (lambda (x) (ask x 'get-count)) sideboard))))
+             ((eq? message 'get-deck)
+              (lambda (self)
+                deck))
+             ((eq? message 'get-sideboard)
+              (lambda (self)
+                sideboard))
+             
+             ((eq? message 'filter-deck)
+              (lambda (self feature value)
+                (make-deck-from-cardlist (filter-by-feature feature value deck)
+                                         (filter-by-feature feature value sideboard))))
+             
+             
+             
+             (else (no-method))))))
+
+;; Create deck from cardlist
+    
+(define (make-deck-from-cardlist deck [sideboard '()])
+  (let ((deck-obj (make-deck)))
+    (for-each (lambda (x) (ask deck-obj 'add-cards (ask x 'get-count) (ask x 'get-name))) deck)
+    (for-each (lambda (x) (ask deck-obj 'add-cards-sideboard (ask x 'get-count) (ask x 'get-name))) sideboard)
+    deck-obj))
+              
+;; Create deck from a file
+
+(define (SB? string)
+ (equal? "SB" (car (string-split string))))
+
+(define (Card? string)
+ (not (eq? #f (string->number (car (string-split string))))))
+
+(define (stream->deck file)
+  (let ((line (read-line file)))
+    (cond ((eof-object? line)
+           (make-deck))
+          ((Card? line)
+           (let ((in (open-input-string line)))
+             (ask (stream->deck file) 'add-cards 
+                  (read in) (string-trim (read-line in))  )))
+          ((SB? line)
+           (let ((in (open-input-string line)))
+             (read in)
+             (ask (stream->deck file) 'add-cards-sideboard 
+                  (read in) (string-trim (read-line in))  )))
+          )))
+
+;; Deck Database Analysis
+
+(define (filter-by-card card-name lst)
+  (filter
+   (lambda (x)
+     (ask x 'contains? card-name))
+   lst))
+  
+(define (make-deck-database database)
+    (lambda (message)
+      (cond ((eq? message 'get-num-decks)
+             (lambda (self)
+               (length database)))
+            ((eq? message 'decks-containg)
+             (lambda (self card-name)
+               (length 
+                (filter-by-card card-name database))))
+            ((eq? message 'total-copies)
+             (lambda (self card-name)
+               (foldl + 0 
+                      (map (lambda (x) (ask x 'get-count card-name)) database))))
+            ((eq? message 'maindeck-copies)
+             (lambda (self card-name)
+               (foldl + 0 
+                      (map (lambda (x) (ask x 'get-deck-count card-name)) database))))
+            ((eq? message 'sideboard-copies)
+             (lambda (self card-name)
+               (foldl + 0 
+                      (map (lambda (x) (ask x 'get-sideboard-count card-name)) database))))
+             ((eq? message 'avg-cmc)
+              (lambda (self)
+                (/ (foldl + 0
+                          (map (lambda (x) (ask x 'avg-cmc)) database))
+                   (ask self 'get-num-decks))))
+             ((eq? message 'avg-cmc-by-card)
+              (lambda (self card-name)
+                (let ((filtered (filter-by-card card-name database)))
+                  (/ (foldl + 0
+                            (map (lambda (x) (ask x 'avg-cmc)) 
+                                 filtered))
+                     (length filtered)))))
+             ((eq? message 'avg-land-by-card)
+              (lambda (self card-name)
+                (let ((filtered (filter-by-card card-name database)))
+                  (/ (foldl + 0
+                            (map (lambda (x) (ask x 'land-count)) 
+                                 filtered))
+                     (length filtered)))))
+             
+            )))
+
+(define (make-initial-database)
+  (let ((database '()))
+    (for-each 
+     (lambda (x)
+       (define in-file (open-input-file (build-path  "decks" x)))
+       (set! database (append database (list (stream->deck in-file)))))         
+     (filter (lambda (x) (equal? "txt" (bytes->string/utf-8 (filename-extension x)))) (directory-list "decks")))
+    (make-deck-database database)))
+
+
+;; Test Code to be used for example. 
+
+;;(filter (lambda (x) (equal? "txt" (bytes->string/utf-8 (filename-extension x)))) (directory-list "decks"))
+
+;;(define testDeck (stream->deck (open-input-file "decks/Abzan Midrange.txt")))
+;;(define out-file (open-output-file "test-out.txt" #:mode 'text #:exists 'replace))
+;;(ask testDeck 'out out-file)
+;;(close-output-port out-file)
+;;(define tCard "Dig Through Time")
+;;(define database (make-initial-database))
+
+;;(ask database 'decks-containg tCard)
+;;(ask database 'total-copies tCard)
+;;(ask database 'maindeck-copies tCard)
+;;(ask database 'sideboard-copies tCard)
+;;(ask database 'avg-cmc-by-card "Forest")
+;;(ask database 'avg-land-by-card "Forest")
+
+#|
+(for-each 
+ (lambda (x)
+   (define in-file (open-input-file (build-path  "decks" x)))
+   (display x)
+   (let ((deck (stream->deck in-file)))
+     (display #\newline)
+     (display #\tab)
+     (display "Deck size: ")
+     (display (ask deck 'deck-size))
+     ;;(display #\newline)
+     ;;(display #\tab)
+     ;;(display "Creature Count: ")
+     ;;(display (ask deck 'creature-count))
+     )
+   (display #\newline))
+ (filter (lambda (x) (equal? "txt" (bytes->string/utf-8 (filename-extension x)))) (directory-list "decks")))
+|#
+
+;;(ask testDeck 'land-count)
+
+;;(define decks (filter (lambda (x) (equal? "txt" (bytes->string/utf-8 (filename-extension x)))) (directory-list "decks")))
+;;(define output (append '() (list (stream->deck (open-input-file (build-path  "decks" (car decks)))))))
+;;(append output (list (stream->deck (open-input-file (build-path  "decks" (cadr decks))))))
+
+;; Graphics 
+
+(define testDeck (stream->deck (open-input-file "decks/Abzan Midrange.txt")))
+
+;;; Was the most useful way of using all of these images and displaying them. 
+;;; http://docs.racket-lang.org/teachpack/2htdpimage.html#%28def._%28%28lib._2htdp%2Fimage..rkt%29._bitmap%2Ffile%29%29
+
+;;; How to Set up the Sudo GUI.
+;;  Nothing to really click, Just shows Statistics. 
+;;  List of things to be shown. 
+;;  Positions of those things. 
+;;  The envoirment to display them. 
+
+;;; "img/Cardname.hq.jpq"
+;; No underscores for the cards. 
+
+;;; Racket Color Database
+;; http://docs.racket-lang.org/draw/color-database___.html
+
+;;; Card Image Dimensions are, 265 by 370 and the images are displayed from the center.
+;;  so 132.5 and 185. 
+;;  I added 5px to each 
+;;  *Keeping in mind posn works by (X Y)*
+
+;;; Master control for the GUI, needs Plugging in with the Actual Statistics.
+
+;;; Color Coder that sets the color for the Stats based on thier number. 
+;;  used this Images to decide on the colors to be used for the coloring. 
+;;  http://www.homelandsecuritynewswire.com/sites/default/files/imagecache/standard/terror_alert-1.jpg
+
+;; Using Abzan Charm for a Test example of the card UI.  
+
+
+(define (Color_Coder x)
+(cond
+   [(>= x 90) "Medium Spring Green"] ;;; More than 70% of Decks. 
+   [(>= x 70) "RoyalBlue"] ;;; More than 70% of Decks. 
+   [(>= x 50) "Yellow"] ;;; More than 50% of Decks. 
+   [(>= x 30) "DarkOrange"] ;;; More than 30% of Decks. 
+   [(>= x 0) "Red"] ;;; More than 10% of Decks. 
+   [else "Pink"]))    ;;; Else Should be Pink to show this is an error.
+
+;;; Following 4 funtions are used to convert the raw Percent numbers into strings 
+;;  to be showed on screen.
+
+(define (Stat_to_String_1 x)
+  (string-append "This card shows up is in " (number->string x) " decks" ))
+
+(define (Stat_to_String_2 x)
+  (string-append "There are " (number->string x) " copies in all decks" ))
+
+(define (Stat_to_String_3 x)
+  (string-append "There are " (number->string x) " maindeck copies in all decks" ))
+
+(define (Stat_to_String_4 x)
+  (string-append "There are " (number->string x) " sideboard copies in all decks" ))
+
+(define (Card-Name-Converter string)
+  (string-downcase string)
+  (string-append "img/" string ".hq.jpq"))
+
+(define tCard "Forest")
+(define database (make-initial-database))
+
+(ask database 'decks-containg tCard)
+(ask database 'total-copies tCard)
+(ask database 'maindeck-copies tCard)
+(ask database 'sideboard-copies tCard)
+
+;;; This is the main funtion used to place the images on screen. 
+
+;(place-images
+   (list (text "Card Name" 36 "black") ;;; Card Name
+         (text "Deck Name" 36 "black") ;;; Deck Name
+         (text (Stat_to_String_1 (ask database 'decks-containg tCard) ) 40 (Color_Coder (ask database 'decks-containg tCard))) ;;; Stat 1
+         (text (Stat_to_String_2 (ask database 'total-copies tCard) ) 40 (Color_Coder (ask database 'total-copies tCard))) ;;; Stat 2
+         (text (Stat_to_String_3 (ask database 'maindeck-copies tCard) ) 40 (Color_Coder (ask database 'maindeck-copies tCard))) ;;; Stat 3
+         (text (Stat_to_String_4 (ask database 'sideboard-copies tCard) ) 40 (Color_Coder (ask database 'sideboard-copies tCard))) ;;; Stat 4
+         ;(bitmap/file "img/abomination of gudul.hq.jpg" ) ;;; Card Image
+         (text "Gregory James Caldwell Jr. & Robert Shaffer" 10 "firebrick") ;;; Names
+         (star 10 "solid" "firebrick")) ;;; Misc Water Mark 
+   
+;   (list (make-posn 120 30) ;;; Card Name Position 
+;         (make-posn 120 70)  ;;; Deck Name Position 
+;         (make-posn 225 150)  ;;; Stat 1 Position 
+;         (make-posn 225 200)  ;;; Stat 2 Position 
+;         (make-posn 225 250)  ;;; Stat 3 Position 
+;         (make-posn 225 300)  ;;; Stat 4 Position 
+;         (make-posn (- 800 137.5 ) (- 600 190))  ;;; Card Image
+;         (make-posn 125 590)  ;; Watermark Names Position 
+;         (make-posn 10 590)) ;; Watermark Star Position 
+;   (rectangle 800 600 "solid" "darkcyan"))
